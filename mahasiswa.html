@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ujian - HP Mahasiswa</title>
+    <!-- Import Paho MQTT Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f4f4f9; }
+        .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); margin-top: 20px; }
+        h1 { color: #333; }
+        .btn { padding: 15px 30px; font-size: 18px; background: #007BFF; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        #status { font-size: 24px; font-weight: bold; margin-top: 20px; color: #555; }
+    </style>
+</head>
+<body>
+    <h1>Mode Ujian (HP 1)</h1>
+    <p>Tekan tombol di bawah, lalu telungkupkan HP di atas meja.</p>
+    <button class="btn" id="startBtn">Mulai Ujian & Aktifkan Sensor</button>
+    
+    <div class="card">
+        <div>Status Posisi: <span id="status">MENUNGGU...</span></div>
+        <div style="margin-top:10px; font-size:12px; color:gray;">Z-Axis: <span id="zAxis">0.00</span></div>
+    </div>
+
+    <script>
+        // Konfigurasi MQTT (Sesuai panduan PDF HiveMQ)
+        const broker = "broker.hivemq.com";
+        const port = 8884;
+        const topic = "proyek_iot/ujian/mahasiswa_01";
+        const clientId = "MHS_" + Math.random().toString(16).substr(2, 8);
+        
+        let client = new Paho.MQTT.Client(broker, port, "/mqtt", clientId);
+
+        // State Machine Variables
+        let currentState = "UNKNOWN"; // Bisa: FACE_DOWN (Aman) atau LIFTED (Curang)
+        let liftStartTime = 0;
+        let liftCount = 0;
+
+        // Hubungkan ke MQTT
+        client.connect({
+            useSSL: true,
+            onSuccess: () => console.log("MQTT Terhubung!"),
+            onFailure: (err) => alert("Gagal konek MQTT: " + err.errorMessage)
+        });
+
+        // Fungsi kirim payload ke Dashboard
+        function sendPayload(status, duration = 0) {
+            let payload = {
+                device_id: "Mahasiswa_01",
+                timestamp: new Date().toLocaleTimeString(),
+                status: status,
+                duration_sec: duration,
+                lift_count: liftCount
+            };
+            let message = new Paho.MQTT.Message(JSON.stringify(payload));
+            message.destinationName = topic;
+            client.send(message);
+        }
+
+        // Aktifkan Sensor saat tombol diklik (Wajib untuk iOS/Android modern)
+        document.getElementById('startBtn').addEventListener('click', () => {
+            if (typeof DeviceMotionEvent.requestPermission === 'function') {
+                DeviceMotionEvent.requestPermission().then(permissionState => {
+                    if (permissionState === 'granted') startSensor();
+                    else alert("Izin sensor ditolak!");
+                }).catch(console.error);
+            } else {
+                startSensor(); // Untuk Android biasa
+            }
+            document.getElementById('startBtn').style.display = 'none';
+        });
+
+        function startSensor() {
+            window.addEventListener('devicemotion', (event) => {
+                let z = event.accelerationIncludingGravity.z;
+                document.getElementById('zAxis').innerText = z.toFixed(2);
+
+                // Algoritma Thresholding & Hysteresis
+                // Z < -7.5 berarti HP telungkup di meja
+                if (z < -7.5 && currentState !== "FACE_DOWN") {
+                    currentState = "FACE_DOWN";
+                    document.getElementById('status').innerText = "AMAN (DI MEJA)";
+                    document.getElementById('status').style.color = "green";
+                    
+                    let duration = 0;
+                    if (liftStartTime > 0) {
+                        duration = ((Date.now() - liftStartTime) / 1000).toFixed(1);
+                    }
+                    sendPayload("RESTORED", duration);
+                } 
+                // Z > -4.0 berarti HP diangkat/dibalik
+                else if (z > -4.0 && currentState !== "LIFTED") {
+                    currentState = "LIFTED";
+                    liftStartTime = Date.now();
+                    liftCount++;
+                    
+                    document.getElementById('status').innerText = "DIANGKAT! (CURANG)";
+                    document.getElementById('status').style.color = "red";
+                    
+                    sendPayload("LIFTED", 0);
+                }
+            });
+        }
+    </script>
+</body>
+</html>

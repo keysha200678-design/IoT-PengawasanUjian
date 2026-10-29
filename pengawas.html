@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Pengawas Ujian</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #2c3e50; color: white; padding: 20px; }
+        .card { background: white; color: black; padding: 20px; border-radius: 10px; margin-bottom: 20px; text-align: center; }
+        .status-box { font-size: 24px; font-weight: bold; padding: 20px; border-radius: 8px; margin: 10px 0; background: #95a5a6; color: white;}
+        .log-container { background: #ecf0f1; color: black; padding: 10px; border-radius: 5px; height: 200px; overflow-y: scroll; text-align: left; }
+        .log-item { padding: 5px; border-bottom: 1px solid #ccc; font-size: 14px; }
+        button { padding: 10px; background: #e74c3c; color: white; border: none; cursor: pointer; border-radius: 5px;}
+    </style>
+</head>
+<body>
+    <h2>Dashboard Pengawas</h2>
+    <p>Status Koneksi: <span id="connStatus" style="color: yellow;">Menghubungkan...</span></p>
+
+    <div class="card">
+        <h3>Mahasiswa 01</h3>
+        <div id="statusBox" class="status-box">MENUNGGU DATA</div>
+        <p>Total Diangkat: <strong id="countBox">0</strong> kali</p>
+    </div>
+
+    <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3>Log Riwayat Pelanggaran</h3>
+            <button onclick="clearLog()">Hapus Riwayat</button>
+        </div>
+        <div class="log-container" id="logBox"></div>
+    </div>
+
+    <script>
+        // Web Audio API untuk membunyikan alarm tanpa butuh file MP3
+        let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playAlarm() {
+            let oscillator = audioCtx.createOscillator();
+            let gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            oscillator.type = 'square';
+            oscillator.frequency.setValueAtTime(800, audioCtx.currentTime); // Nada tinggi
+            gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + 0.5); // Bunyi 0.5 detik
+        }
+
+        // Konfigurasi MQTT
+        const broker = "broker.hivemq.com";
+        const port = 8884;
+        const topic = "proyek_iot/ujian/mahasiswa_01";
+        const clientId = "PENGAWAS_" + Math.random().toString(16).substr(2, 8);
+        
+        let client = new Paho.MQTT.Client(broker, port, "/mqtt", clientId);
+
+        client.onConnectionLost = (resp) => document.getElementById("connStatus").innerText = "Terputus!";
+        client.onMessageArrived = (msg) => processData(JSON.parse(msg.payloadString));
+
+        client.connect({
+            useSSL: true,
+            onSuccess: () => {
+                document.getElementById("connStatus").innerText = "Terhubung";
+                document.getElementById("connStatus").style.color = "lime";
+                client.subscribe(topic);
+                loadHistory(); // Load data dari localStorage
+            }
+        });
+
+        function processData(data) {
+            let statusBox = document.getElementById("statusBox");
+            document.getElementById("countBox").innerText = data.lift_count;
+
+            if (data.status === "LIFTED") {
+                statusBox.innerText = "HP DIANGKAT!";
+                statusBox.style.background = "#e74c3c"; // Merah
+                playAlarm(); // Bunyikan alarm
+                addLog(`[${data.timestamp}] ⚠️ HP Diangkat dari meja!`);
+            } 
+            else if (data.status === "RESTORED") {
+                statusBox.innerText = "AMAN (DI MEJA)";
+                statusBox.style.background = "#2ecc71"; // Hijau
+                addLog(`[${data.timestamp}] ✅ HP diletakkan kembali. Durasi curang: ${data.duration_sec} detik.`);
+            }
+        }
+
+        // Fungsi LocalStorage (Data Persistence)
+        function addLog(text) {
+            let logBox = document.getElementById("logBox");
+            let logs = JSON.parse(localStorage.getItem("ujianLogs")) || [];
+            logs.unshift(text); // Masukkan di paling atas
+            localStorage.setItem("ujianLogs", JSON.stringify(logs));
+            renderLog();
+        }
+
+        function renderLog() {
+            let logBox = document.getElementById("logBox");
+            let logs = JSON.parse(localStorage.getItem("ujianLogs")) || [];
+            logBox.innerHTML = logs.map(l => `<div class="log-item">${l}</div>`).join('');
+        }
+
+        function loadHistory() { renderLog(); }
+        
+        function clearLog() {
+            localStorage.removeItem("ujianLogs");
+            renderLog();
+        }
+    </script>
+</body>
+</html>
